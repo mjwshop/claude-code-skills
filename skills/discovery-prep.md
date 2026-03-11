@@ -2,7 +2,7 @@ Generate a discovery brief and meeting prep doc for: $ARGUMENTS
 
 ## Instructions
 
-Build a comprehensive discovery brief for the specified merchant or account. The output should have a quick TL;DR at the top for fast reference, followed by a detailed brief below.
+Build a comprehensive discovery brief for the specified merchant or account. The output should have a quick TL;DR at the top for fast reference, followed by a detailed brief below. Run Steps 1-4 in parallel where possible to minimize wait time.
 
 ### Step 1: Resolve the Account
 
@@ -25,7 +25,76 @@ Use `revenue-mcp ai_company_enrichment` with the account name and/or domain to g
 - Physical retail footprint
 - Social media presence
 
-### Step 4: Generate the Discovery Brief
+### Step 4: Salesforce Context
+
+Use `revenue-mcp search_salesforce_tool` to pull CRM context. Run these queries:
+
+**4a — Open Opportunities:**
+```sql
+SELECT Id, Name, StageName, CloseDate, Amount, Type, OwnerId, Owner.Name,
+       Product_Line__c, CreatedDate, LastModifiedDate
+FROM Opportunity
+WHERE Account.Name LIKE '%[merchant name]%'
+  AND RecordType.Name = 'Sales'
+  AND IsClosed = false
+ORDER BY CloseDate ASC
+LIMIT 10
+```
+
+**4b — Recent Closed Opportunities (last 12 months):**
+```sql
+SELECT Id, Name, StageName, CloseDate, Amount, Type, Product_Line__c, IsWon
+FROM Opportunity
+WHERE Account.Name LIKE '%[merchant name]%'
+  AND RecordType.Name = 'Sales'
+  AND IsClosed = true
+  AND CloseDate = LAST_N_DAYS:365
+ORDER BY CloseDate DESC
+LIMIT 10
+```
+
+**4c — Recent Cases (launches, support):**
+```sql
+SELECT Id, Subject, Status, Type, CreatedDate, LastModifiedDate
+FROM Case
+WHERE Account.Name LIKE '%[merchant name]%'
+  AND CreatedDate = LAST_N_DAYS:365
+ORDER BY CreatedDate DESC
+LIMIT 10
+```
+
+**4d — Key Contacts:**
+```sql
+SELECT Id, Name, Title, Email, Phone
+FROM Contact
+WHERE Account.Name LIKE '%[merchant name]%'
+  AND (Title LIKE '%VP%' OR Title LIKE '%Director%' OR Title LIKE '%Head%'
+       OR Title LIKE '%Chief%' OR Title LIKE '%Manager%' OR Title LIKE '%Commerce%'
+       OR Title LIKE '%Digital%' OR Title LIKE '%eCommerce%')
+LIMIT 10
+```
+
+If Salesforce queries return 0 results (access restrictions), note "Salesforce data not available" and proceed.
+
+### Step 5: Conversation History & Merchant Signals
+
+Pull prior interactions and merchant intelligence from available sources. Run these in parallel:
+
+**5a — Slack Mentions:**
+Use `playground-slack-mcp get_messages` with action `search` to find recent mentions of the merchant name. Search for the merchant name across all channels. Surface the 5 most recent relevant messages — note who was discussing the account, what was said, and any action items or context.
+
+**5b — Sales Conversation Pain Points:**
+Use `scout search_sales_conversations` with `pain_point_keywords` matching the merchant's industry or known products. Filter by the account if possible. Surface any merchant-specific pain points from sales calls.
+
+**5c — Support Ticket Patterns:**
+Use `scout search_support_tickets` with the merchant name or shop ID if available. Look for recurring issues, frustrations, or patterns that could inform discovery questions.
+
+**5d — Merchant Frustrations (Industry-Level):**
+Use `scout search_merchant_frustrations` filtered by the merchant's industry or relevant component. This provides broader industry pain points to contextualize the merchant's likely challenges.
+
+If any of these return no results, proceed without that data — note it as "No data found" in the relevant section.
+
+### Step 6: Generate the Discovery Brief
 
 Format the output exactly as follows:
 
@@ -46,6 +115,7 @@ Format the output exactly as follows:
 | **Current Products** | [List of adopted Shopify products] |
 | **Eligible Products** | [Products they could adopt but haven't] |
 | **Retail Locations** | [Count or "None detected"] |
+| **Open Opportunities** | [Count and summary — e.g., "2 open: Plus renewal ($50K, closing Apr), B2B expansion ($120K, closing Jun)"] |
 | **Key Opportunity** | [1-sentence summary of the biggest expansion opportunity] |
 
 ### Top 3 Discovery Priorities
@@ -69,6 +139,15 @@ This should be the one question that, if the AE is short on time, will unlock th
 - Digital maturity assessment (website quality, social presence, tech stack indicators)
 - Physical presence (locations, retail footprint)
 
+### Relationship History
+Summarize the existing relationship based on Salesforce and Slack data:
+- **Open Opportunities**: List each with stage, amount, product line, owner, and close date
+- **Recent Closed Deals**: Won/lost in last 12 months — what products, what amounts
+- **Active Cases**: Any open launch cases, support cases, or escalations
+- **Key Contacts**: Decision-makers and their titles from Salesforce
+- **Internal Chatter**: Summary of recent Slack conversations about this merchant — who's been involved, what's been discussed, any flags or context
+- If no prior relationship exists, note "No prior Salesforce or Slack history found — appears to be a new prospect"
+
 ### Current Shopify Footprint
 - Active products and plan details
 - GMV trends and revenue metrics
@@ -81,15 +160,18 @@ For each eligible product they haven't adopted:
 - Estimate potential impact where possible
 
 ### Pain Point Hypotheses
-Based on the account profile, industry, and product gaps, generate 3-5 hypotheses about challenges they likely face:
+Based on the account profile, industry, product gaps, support tickets, sales conversations, and merchant frustrations, generate 3-5 hypotheses about challenges they likely face:
 1. **[Hypothesis]** - Evidence from data + suggested discovery angle
 2. **[Hypothesis]** - Evidence from data + suggested discovery angle
 (etc.)
+
+Flag any pain points that came directly from Scout data (support tickets, sales conversations, or merchant frustrations) with a "[Scout]" tag so the AE knows these are evidence-based, not inferred.
 
 ### Recommended Discovery Questions
 
 #### Opening / Relationship Building
 - 2-3 questions to understand their current priorities and challenges
+- If there's prior relationship history, reference it: "Last time we spoke, [context] — how has that progressed?"
 
 #### Business Model & Operations
 - 3-4 questions tailored to their industry and business model
@@ -109,12 +191,13 @@ Based on the account profile, industry, and product gaps, generate 3-5 hypothese
 
 ### Suggested Next Steps
 - Recommended actions before the discovery call
-- Key stakeholders to identify
+- Key stakeholders to identify (use Salesforce contacts if available)
 - Follow-up items to prepare
+- If there are open opportunities, note alignment with discovery goals
 
 ---
 
-### Step 5: Google Doc Export
+### Step 7: Google Doc Export
 
 After generating the brief, ask: **"Export to Google Doc? (yes/no)"**
 
@@ -136,3 +219,5 @@ If yes, use `gworkspace-mcp create_file` to create a new Google Doc titled "Disc
 - Prioritize actionable insights over raw data dumps
 - If the account has B2B indicators (eligible for B2B, has company data), include B2B-specific discovery angles
 - Keep the TL;DR genuinely brief - it should be scannable in 30 seconds
+- When Salesforce or Slack data reveals prior conversations, weave that context into the discovery questions — don't ask things the team already knows
+- Scout data (support tickets, sales conversations, frustrations) should inform pain point hypotheses and make questions more specific
